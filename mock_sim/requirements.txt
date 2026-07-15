@@ -1,0 +1,10 @@
+# No external packages required — mock_game_process.py and external_reader.py
+# only use the Python standard library (ctypes, multiprocessing.shared_memory,
+# tkinter, math, dataclasses, random, time).
+#
+# On Windows, the official python.org installer bundles Tcl/Tk, so tkinter
+# works out of the box. If you installed Python via the Microsoft Store and
+# hit "No module named '_tkinter'", reinstall from python.org instead, or run:
+#   py -m pip install tk
+# (only needed on distributions that stripped Tk out, e.g. some Linux setups —
+# not normally required on Windows).
