@@ -175,6 +175,7 @@ class CS2Memory:
     def attach(self) -> bool:
         """cs2.exe process'ine bağlan."""
         self.process_id = find_process("cs2.exe")
+        print(self.process_id)
         if not self.process_id:
             print("[!] cs2.exe bulunamadı! Oyun çalışıyor mu?")
             return False
