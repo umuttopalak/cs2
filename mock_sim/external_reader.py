@@ -16,6 +16,8 @@ import time
 
 import ctypes
 import sys
+
+
 class PROCESSENTRY32(ctypes.Structure):
     _fields_ = [
         ("dwSize", ctypes.c_uint32),
@@ -137,33 +139,24 @@ def get_module_base(process_id: int, module_name: str) -> Optional[int]:
             ("szExePath", ctypes.c_char * 260),
         ]
 
-    snapshot = kernel32.CreateToolhelp32Snapshot(
-        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process_id
-    )
-    if snapshot == ctypes.c_void_p(-1).value:
-        print("none")
-        return None
+        snapshot = kernel32.CreateToolhelp32Snapshot(
+            TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process_id
+        )
 
-    me = MODULEENTRY32()
-    me.dwSize = ctypes.sizeof(MODULEENTRY32)
+        if snapshot == ctypes.c_void_p(-1).value:
+            print("Snapshot failed")
+            print(ctypes.get_last_error())
 
-    if kernel32.Module32First(snapshot, ctypes.byref(me)):
-        print("inside")
-        while True:
-            mod = me.szModule.decode("utf-8", errors="ignore")
 
-            print(mod)
+        me = MODULEENTRY32()
+        me.dwSize = ctypes.sizeof(MODULEENTRY32)
 
-            if mod.lower() == module_name.lower():
-                kernel32.CloseHandle(snapshot)
-                return me.modBaseAddr
+        ok = kernel32.Module32First(snapshot, ctypes.byref(me))
+        print("Module32First =", ok)
 
-            if not kernel32.Module32Next(snapshot, ctypes.byref(me)):
-                break
-    print("closign")
-    kernel32.CloseHandle(snapshot)
-    print("closed")
-    return None
+        if not ok:
+            print("GetLastError =", ctypes.get_last_error())
+            kernel32.CloseHandle(snapshot)
 
 
 class CS2Memory:
