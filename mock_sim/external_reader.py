@@ -60,20 +60,20 @@ PROCESS_VM_READ = 0x0010
 PROCESS_QUERY_INFORMATION = 0x0400
 
 
-# GÜNCEL OFFSET'LER - cs2 her güncellemede değişir!
-# https://github.com/a2x/cs2-offsets adresinden güncelle
 class Offsets:
-    dwLocalPlayerController = 0x237B120   # 37219232
-    dwEntityList = 0x254EE60              # 39120480
-    dwViewMatrix = 0x23A9340             # 37393216
+    # client.dll - Module offsets (sezzyaep/CS2-OFFSETS, Build 14170)
+    dwLocalPlayerController = 0x237EBA0
+    dwEntityList = 0x254EE60
+    dwViewMatrix = 0x23A9340
     
-    m_iHealth = 0x34C
-    m_hPlayerPawn = 0x914
-    m_iTeamNum = 0x3E7     # doğrula
-    m_sSanitizedPlayerName = 0x778        # 1912
-    m_vecOrigin = 0x600
-    m_vecViewOffset = 0xE78
-    m_lifeState = 0x354
+    # Schema offsets (Haziran 2026 - cheater.fun kaynağı, en güncel)
+    m_iHealth = 0x34C             # C_BaseEntity -> m_iHealth
+    m_lifeState = 0x354           # C_BaseEntity -> m_lifeState (0x350 değil, 0x354)
+    m_hPlayerPawn = 0x914         # C_BasePlayerController -> m_hPlayerPawn (2316 = 0x90C değil, 0x914 doğru)
+    m_iTeamNum = 0x3EB            # 1003 - C_BaseEntity -> m_iTeamNum
+    m_sSanitizedPlayerName = 0x860  # 2144 = 0x860 - CBasePlayerController -> m_sSanitizedPlayerName
+    m_vecOrigin = 0x600           # C_BasePlayerPawn -> m_vecOrigin (büyük ihtimalle, doğrula)
+    m_vecViewOffset = 0xE78       # placeholder
 
 
 # ---------------------------------------------------------------------------
@@ -549,104 +549,113 @@ class CS2Reader:
         self.local_player = None
         self.players: list[PlayerData] = []
 
-    def update(self):
-        """Bir frame'lik veri oku."""
-        if not self.mem.client_base:
-            return
+def update(self):
+    """Bir frame'lik veri oku."""
+    if not self.mem.client_base:
+        return
 
-        # View matrix oku
-        matrix_addr = self.mem.client_base + Offsets.dwViewMatrix
-        self.view_matrix = self.mem.read_matrix_4x4(matrix_addr)
-        if not self.view_matrix:
-            return
+    # View matrix oku
+    matrix_addr = self.mem.client_base + Offsets.dwViewMatrix
+    self.view_matrix = self.mem.read_matrix_4x4(matrix_addr)
+    if not self.view_matrix:
+        return
 
-        # Local player
-        local_addr = self.mem.read_uint32(
-            self.mem.client_base + Offsets.dwLocalPlayerController
+    # --- Local Player Controller ---
+    local_controller = self.mem.read_uint32(
+        self.mem.client_base + Offsets.dwLocalPlayerController
+    )
+    if not local_controller:
+        return
+
+    local_team = self.mem.read_uint32(local_controller + Offsets.m_iTeamNum) or 0
+    local_health = self.mem.read_uint32(local_controller + Offsets.m_iHealth) or 0
+
+    # Local Player Pawn - pozisyon için Pawn'a ihtiyacımız var
+    local_pawn_handle = self.mem.read_uint32(local_controller + Offsets.m_hPlayerPawn)
+    local_pawn_index = local_pawn_handle & 0xFFF if local_pawn_handle else 0
+
+    # Entity list üzerinden Pawn adresini çöz
+    entity_list = self.mem.read_uint32(self.mem.client_base + Offsets.dwEntityList)
+    local_pawn_addr = None
+    local_pos = (0, 0, 0)
+
+    if entity_list and local_pawn_index:
+        list_entry = self.mem.read_uint32(entity_list + 0x8 * (local_pawn_index >> 9) + 0x10)
+        if list_entry:
+            local_pawn_addr = self.mem.read_uint32(list_entry + 0x78 * (local_pawn_index & 0x1FF))
+            if local_pawn_addr:
+                pos = self.mem.read_vec3(local_pawn_addr + Offsets.m_vecOrigin)
+                if pos:
+                    local_pos = pos
+
+    self.local_player = PlayerData(
+        entity_id=0,
+        name="LOCAL",
+        health=local_health,
+        team=local_team,
+        position=local_pos,
+        alive=True,
+    )
+
+    # --- Diğer Oyuncular ---
+    self.players = []
+
+    if not entity_list:
+        return
+
+    for i in range(1, 65):
+        # Controller list entry
+        controller_entry = self.mem.read_uint32(entity_list + (i * 0x10))
+        if not controller_entry:
+            continue
+
+        controller = controller_entry  # direkt pointer (CS2'de böyle)
+
+        health = self.mem.read_uint32(controller + Offsets.m_iHealth)
+        if not health or health == 0 or health > 100:
+            continue
+
+        team = self.mem.read_uint32(controller + Offsets.m_iTeamNum)
+
+        # Kendini atla (controller adresine göre)
+        if controller == local_controller:
+            continue
+
+        name = self.mem.read_string(controller + Offsets.m_sSanitizedPlayerName)
+
+        # Pawn handle'dan pozisyon al
+        pawn_handle = self.mem.read_uint32(controller + Offsets.m_hPlayerPawn)
+        if not pawn_handle:
+            continue
+
+        pawn_index = pawn_handle & 0xFFF
+        list_entry2 = self.mem.read_uint32(entity_list + 0x8 * (pawn_index >> 9) + 0x10)
+        if not list_entry2:
+            continue
+
+        pawn_addr = self.mem.read_uint32(list_entry2 + 0x78 * (pawn_index & 0x1FF))
+        if not pawn_addr:
+            continue
+
+        pos = self.mem.read_vec3(pawn_addr + Offsets.m_vecOrigin)
+        if not pos:
+            continue
+
+        life_state = self.mem.read_uint32(pawn_addr + Offsets.m_lifeState) or 0
+
+        dist = get_player_distance(local_pos, pos)
+
+        self.players.append(
+            PlayerData(
+                entity_id=i,
+                name=name,
+                health=health,
+                team=team or 0,
+                position=pos,
+                alive=(life_state == 0),
+                distance=dist,
+            )
         )
-        if not local_addr:
-            return
-
-        local_pawn_handle = self.mem.read_uint32(local_addr + Offsets.m_hPlayerPawn)
-        if not local_pawn_handle:
-            return
-
-        local_pawn = local_pawn_handle & 0xFFF  # index mask
-        local_team = self.mem.read_uint32(local_addr + Offsets.m_iTeamNum)
-        local_pos = self.mem.read_vec3(local_addr + Offsets.m_vecOrigin) or (0, 0, 0)
-
-        self.local_player = PlayerData(
-            entity_id=0,
-            name="LOCAL",
-            health=self.mem.read_uint32(local_addr + Offsets.m_iHealth) or 0,
-            team=local_team or 0,
-            position=local_pos,
-            alive=True,
-        )
-
-        # Entity list
-        entity_list = self.mem.read_uint32(self.mem.client_base + Offsets.dwEntityList)
-        if not entity_list:
-            return
-
-        self.players = []
-
-        # CS2'de max 64 oyuncu slotu
-        for i in range(1, 65):
-            controller_addr = self.mem.read_uint32(entity_list + (i * 0x10))
-            if not controller_addr or controller_addr == 0:
-                continue
-
-            health = self.mem.read_uint32(controller_addr + Offsets.m_iHealth)
-            if not health or health == 0 or health > 100:
-                continue
-
-            team = self.mem.read_uint32(controller_addr + Offsets.m_iTeamNum)
-
-            # Kendini atla
-            if team == local_team and controller_addr == local_addr:
-                continue
-
-            name = self.mem.read_string(
-                controller_addr + Offsets.m_sSanitizedPlayerName
-            )
-
-            # Pawn pointer'dan pozisyon al
-            pawn_handle = self.mem.read_uint32(controller_addr + Offsets.m_hPlayerPawn)
-            if not pawn_handle:
-                continue
-
-            pawn_index = pawn_handle & 0xFFF
-            list_entry = self.mem.read_uint32(
-                entity_list + 0x8 * (pawn_index >> 9) + 0x10
-            )
-            if not list_entry:
-                continue
-
-            pawn_addr = self.mem.read_uint32(list_entry + 0x78 * (pawn_index & 0x1FF))
-            if not pawn_addr:
-                continue
-
-            pos = self.mem.read_vec3(pawn_addr + Offsets.m_vecOrigin)
-            if not pos:
-                continue
-
-            life_state = self.mem.read_uint32(pawn_addr + Offsets.m_lifeState) or 0
-
-            dist = get_player_distance(local_pos, pos)
-
-            self.players.append(
-                PlayerData(
-                    entity_id=i,
-                    name=name,
-                    health=health,
-                    team=team or 0,
-                    position=pos,
-                    alive=(life_state == 0),
-                    distance=dist,
-                )
-            )
-
 
 # ---------------------------------------------------------------------------
 # tkinter UI
