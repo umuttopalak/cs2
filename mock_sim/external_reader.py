@@ -148,6 +148,7 @@ def get_module_base(process_id: int, module_name: str) -> Optional[int]:
     me.dwSize = ctypes.sizeof(MODULEENTRY32)
 
     if kernel32.Module32First(snapshot, ctypes.byref(me)):
+        print("inside")
         while True:
             mod = me.szModule.decode("utf-8", errors="ignore")
 
@@ -159,8 +160,9 @@ def get_module_base(process_id: int, module_name: str) -> Optional[int]:
 
             if not kernel32.Module32Next(snapshot, ctypes.byref(me)):
                 break
-
+    print("closign")
     kernel32.CloseHandle(snapshot)
+    print("closed")
     return None
 
 
