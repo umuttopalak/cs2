@@ -659,4 +659,6 @@ def main():
 
 
 if __name__ == "__main__":
+    base = get_module_base(17888, "kernel32.dll")
+    print(hex(base) if base else None)
     main()
