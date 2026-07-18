@@ -16,8 +16,6 @@ import time
 
 import ctypes
 import sys
-
-
 class PROCESSENTRY32(ctypes.Structure):
     _fields_ = [
         ("dwSize", ctypes.c_uint32),
@@ -120,44 +118,93 @@ def find_process(process_name: str) -> Optional[int]:
     return None
 
 
+import ctypes
+from ctypes import wintypes
+from typing import Optional
+
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+TH32CS_SNAPMODULE = 0x00000008
+TH32CS_SNAPMODULE32 = 0x00000010
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+
+class MODULEENTRY32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("th32ModuleID", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("GlblcntUsage", wintypes.DWORD),
+        ("ProccntUsage", wintypes.DWORD),
+        ("modBaseAddr", ctypes.c_void_p),
+        ("modBaseSize", wintypes.DWORD),
+        ("hModule", wintypes.HMODULE),
+        ("szModule", wintypes.WCHAR * 256),
+        ("szExePath", wintypes.WCHAR * 260),
+    ]
+
+
+kernel32.CreateToolhelp32Snapshot.argtypes = [
+    wintypes.DWORD,
+    wintypes.DWORD,
+]
+kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+
+kernel32.Module32FirstW.argtypes = [
+    wintypes.HANDLE,
+    ctypes.POINTER(MODULEENTRY32W),
+]
+kernel32.Module32FirstW.restype = wintypes.BOOL
+
+kernel32.Module32NextW.argtypes = [
+    wintypes.HANDLE,
+    ctypes.POINTER(MODULEENTRY32W),
+]
+kernel32.Module32NextW.restype = wintypes.BOOL
+
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+
+
 def get_module_base(process_id: int, module_name: str) -> Optional[int]:
-    """Process'in modül base adresini al."""
-    TH32CS_SNAPMODULE = 0x00000008
-    TH32CS_SNAPMODULE32 = 0x00000010
+    """
+    Belirtilen process içerisindeki modülün base adresini döndürür.
+    Bulunamazsa None döndürür.
+    """
 
-    class MODULEENTRY32(ctypes.Structure):
-        _fields_ = [
-            ("dwSize", ctypes.c_uint32),
-            ("th32ModuleID", ctypes.c_uint32),
-            ("th32ProcessID", ctypes.c_uint32),
-            ("GlblcntUsage", ctypes.c_uint32),
-            ("ProccntUsage", ctypes.c_uint32),
-            ("modBaseAddr", ctypes.c_uint64),
-            ("modBaseSize", ctypes.c_uint32),
-            ("hModule", ctypes.c_void_p),
-            ("szModule", ctypes.c_char * 256),
-            ("szExePath", ctypes.c_char * 260),
-        ]
+    snapshot = kernel32.CreateToolhelp32Snapshot(
+        TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32,
+        process_id,
+    )
 
-        snapshot = kernel32.CreateToolhelp32Snapshot(
-            TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process_id
-        )
+    if snapshot == INVALID_HANDLE_VALUE:
+        print(f"CreateToolhelp32Snapshot failed: {ctypes.get_last_error()}")
+        return None
 
-        if snapshot == ctypes.c_void_p(-1).value:
-            print("Snapshot failed")
-            print(ctypes.get_last_error())
+    try:
+        module = MODULEENTRY32W()
+        module.dwSize = ctypes.sizeof(MODULEENTRY32W)
 
+        if not kernel32.Module32FirstW(snapshot, ctypes.byref(module)):
+            print(f"Module32FirstW failed: {ctypes.get_last_error()}")
+            return None
 
-        me = MODULEENTRY32()
-        me.dwSize = ctypes.sizeof(MODULEENTRY32)
+        while True:
+            current_name = module.szModule
 
-        ok = kernel32.Module32First(snapshot, ctypes.byref(me))
-        print("Module32First =", ok)
+            # Debug
+            print(current_name)
 
-        if not ok:
-            print("GetLastError =", ctypes.get_last_error())
-            kernel32.CloseHandle(snapshot)
+            if current_name.lower() == module_name.lower():
+                return module.modBaseAddr
 
+            if not kernel32.Module32NextW(snapshot, ctypes.byref(module)):
+                break
+
+        return None
+
+    finally:
+        kernel32.CloseHandle(snapshot)
 
 class CS2Memory:
     """CS2 process'ine bağlanıp bellek okuma."""
