@@ -141,6 +141,7 @@ def get_module_base(process_id: int, module_name: str) -> Optional[int]:
         TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, process_id
     )
     if snapshot == ctypes.c_void_p(-1).value:
+        print("none")
         return None
 
     me = MODULEENTRY32()
