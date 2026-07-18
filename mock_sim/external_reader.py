@@ -172,26 +172,17 @@ def get_module_base_peb(handle: int, module_name: str) -> Optional[int]:
     """
     ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
     
-    # NtQueryInformationProcess
+    # NtQueryInformationProcess - doğru argüman tipleri
     ntdll.NtQueryInformationProcess.argtypes = [
-        ctypes.wintypes.HANDLE,
-        ctypes.wintypes.DWORD,
-        ctypes.c_void_p,
-        ctypes.wintypes.ULONG,
-        ctypes.POINTER(ctypes.wintypes.ULONG),
+        ctypes.wintypes.HANDLE,           # ProcessHandle
+        ctypes.wintypes.DWORD,            # ProcessInformationClass
+        ctypes.c_void_p,                  # ProcessInformation (buffer)
+        ctypes.wintypes.ULONG,            # ProcessInformationLength
+        ctypes.POINTER(ctypes.wintypes.ULONG),  # ReturnLength
     ]
     ntdll.NtQueryInformationProcess.restype = ctypes.wintypes.LONG
-    
-    PROCESS_BASIC_INFORMATION = 0
-    
-    class PEB_LDR_DATA(ctypes.Structure):
-        _fields_ = [
-            ("_length1", ctypes.c_byte * 8),
-            ("_length2", ctypes.c_byte * 8),
-            ("InLoadOrderModuleList", ctypes.c_void_p * 2),
-            ("InMemoryOrderModuleList", ctypes.c_void_p * 2),
-            ("InInitializationOrderModuleList", ctypes.c_void_p * 2),
-        ]
+
+    PROCESS_BASIC_INFORMATION_CLASS = 0  # DWORD olarak
     
     class PROCESS_BASIC_INFORMATION(ctypes.Structure):
         _fields_ = [
@@ -207,81 +198,100 @@ def get_module_base_peb(handle: int, module_name: str) -> Optional[int]:
     return_length = ctypes.wintypes.ULONG(0)
     
     status = ntdll.NtQueryInformationProcess(
-        handle,
-        PROCESS_BASIC_INFORMATION,
+        ctypes.wintypes.HANDLE(handle),         # HANDLE olarak cast et
+        ctypes.wintypes.DWORD(PROCESS_BASIC_INFORMATION_CLASS),  # DWORD olarak cast et
         ctypes.byref(pbi),
-        ctypes.sizeof(pbi),
+        ctypes.wintypes.ULONG(ctypes.sizeof(pbi)),
         ctypes.byref(return_length)
     )
     
     if status != 0:
-        print(f"[!] NtQueryInformationProcess failed: 0x{status:X}")
+        print(f"[!] NtQueryInformationProcess failed. Status: 0x{status:X}, LastError: {ctypes.get_last_error()}")
         return None
     
     peb_addr = pbi.PebBaseAddress
     if not peb_addr:
+        print("[!] PEB adresi boş")
         return None
     
-    # PEB -> LDR
+    print(f"[*] PEB Address: 0x{peb_addr:X}")
+    
+    # PEB -> Ldr
     ldr_data = ctypes.c_void_p(0)
     bytes_read = ctypes.c_ulong(0)
+    
     if not kernel32.ReadProcessMemory(
-        handle,
+        ctypes.wintypes.HANDLE(handle),
         ctypes.c_void_p(peb_addr + 0x18),  # PEB.Ldr
         ctypes.byref(ldr_data),
         ctypes.sizeof(ctypes.c_void_p),
         ctypes.byref(bytes_read)
     ):
-        print("[!] PEB.Ldr okunamadı")
+        print(f"[!] PEB.Ldr okunamadı. Error: {ctypes.get_last_error()}")
         return None
+    
+    if not ldr_data.value:
+        print("[!] LDR data boş")
+        return None
+    
+    print(f"[*] LDR Address: 0x{ldr_data.value:X}")
     
     # LDR -> InLoadOrderModuleList.Flink
     flink = ctypes.c_void_p(0)
     if not kernel32.ReadProcessMemory(
-        handle,
+        ctypes.wintypes.HANDLE(handle),
         ctypes.c_void_p(ldr_data.value + 0x10),  # LDR.InLoadOrderModuleList.Flink
         ctypes.byref(flink),
         ctypes.sizeof(ctypes.c_void_p),
         ctypes.byref(bytes_read)
     ):
-        print("[!] LDR.Flink okunamadı")
+        print(f"[!] LDR.Flink okunamadı. Error: {ctypes.get_last_error()}")
         return None
+    
+    if not flink.value:
+        print("[!] Flink boş")
+        return None
+    
+    print(f"[*] First Flink: 0x{flink.value:X}")
     
     current = flink.value
     first_entry = current
+    module_count = 0
     
     while True:
-        # LIST_ENTRY'nin bulunduğu LDR_DATA_TABLE_ENTRY
-        # Entry->InLoadOrderLinks, LDR_DATA_TABLE_ENTRY'de offset 0
-        entry = current
+        module_count += 1
+        if module_count > 200:  # Sonsuz döngü koruması
+            print("[!] Çok fazla modül, döngü kırıldı")
+            break
         
         # DllBase = LDR_DATA_TABLE_ENTRY + 0x20 (x64)
         dll_base = ctypes.c_void_p(0)
         if not kernel32.ReadProcessMemory(
-            handle,
-            ctypes.c_void_p(entry + 0x20),
+            ctypes.wintypes.HANDLE(handle),
+            ctypes.c_void_p(current + 0x20),  # entry->DllBase
             ctypes.byref(dll_base),
             ctypes.sizeof(ctypes.c_void_p),
             ctypes.byref(bytes_read)
         ):
+            print(f"[!] DllBase okunamadı at 0x{current + 0x20:X}")
             break
         
-        # BaseDllName (UNICODE_STRING) = LDR_DATA_TABLE_ENTRY + 0x38 (x64)
-        # UNICODE_STRING: +0x00 Length(ushort), +0x08 Buffer(ptr)
+        # UNICODE_STRING BaseDllName = LDR_DATA_TABLE_ENTRY + 0x38 (x64)
+        # UNICODE_STRING: +0x00 Length(ushort), +0x02 MaximumLength(ushort), +0x08 Buffer(ptr)
         name_len_buf = ctypes.c_ushort(0)
         if not kernel32.ReadProcessMemory(
-            handle,
-            ctypes.c_void_p(entry + 0x38),
+            ctypes.wintypes.HANDLE(handle),
+            ctypes.c_void_p(current + 0x38),  # entry->BaseDllName.Length
             ctypes.byref(name_len_buf),
-            2,
+            ctypes.sizeof(ctypes.c_ushort),
             ctypes.byref(bytes_read)
         ):
             break
         
         name_ptr = ctypes.c_void_p(0)
         if not kernel32.ReadProcessMemory(
-            handle,
-            ctypes.c_void_p(entry + 0x40),  # UNICODE_STRING.Buffer
+            ctypes.wintypes.HANDLE(handle),
+            ctypes.c_void_p(current + 0x40),  # entry->BaseDllName.Buffer (0x38 + 0x08)
             ctypes.byref(name_ptr),
             ctypes.sizeof(ctypes.c_void_p),
             ctypes.byref(bytes_read)
@@ -291,7 +301,7 @@ def get_module_base_peb(handle: int, module_name: str) -> Optional[int]:
         if name_ptr.value and name_len_buf.value > 0:
             buf = ctypes.create_string_buffer(name_len_buf.value)
             if kernel32.ReadProcessMemory(
-                handle,
+                ctypes.wintypes.HANDLE(handle),
                 ctypes.c_void_p(name_ptr.value),
                 buf,
                 name_len_buf.value,
@@ -299,29 +309,30 @@ def get_module_base_peb(handle: int, module_name: str) -> Optional[int]:
             ):
                 dll_name = buf.raw[:bytes_read.value].decode("utf-16-le", errors="ignore")
                 
+                print(f"[*] Modül {module_count}: '{dll_name}' @ 0x{dll_base.value:X}")
+                
                 if dll_name.lower() == module_name.lower():
                     print(f"[+] {module_name} -> 0x{dll_base.value:X} (PEB yöntemi)")
                     return dll_base.value
         
-        # Sonraki module geç (InLoadOrderLinks.Flink)
+        # Sonraki module geç (LIST_ENTRY.Flink = current + 0x00)
         next_entry = ctypes.c_void_p(0)
         if not kernel32.ReadProcessMemory(
-            handle,
-            ctypes.c_void_p(current),
+            ctypes.wintypes.HANDLE(handle),
+            ctypes.c_void_p(current),  # entry->InLoadOrderLinks.Flink
             ctypes.byref(next_entry),
             ctypes.sizeof(ctypes.c_void_p),
             ctypes.byref(bytes_read)
         ):
             break
         
-        if next_entry.value == first_entry:
+        if not next_entry.value or next_entry.value == first_entry:
             break
         
         current = next_entry.value
     
-    print(f"[!] {module_name} PEB'de bulunamadı")
+    print(f"[!] {module_name} PEB'de bulunamadı. Toplam {module_count} modül tarandı.")
     return None
-
 
 def get_module_base(process_id: int, module_name: str) -> Optional[int]:
     """
