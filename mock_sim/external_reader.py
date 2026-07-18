@@ -16,6 +16,19 @@ import time
 
 import ctypes
 import sys
+class PROCESSENTRY32(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", ctypes.c_uint32),
+        ("cntUsage", ctypes.c_uint32),
+        ("th32ProcessID", ctypes.c_uint32),
+        ("th32DefaultHeapID", ctypes.c_uint64),
+        ("th32ModuleID", ctypes.c_uint32),
+        ("cntThreads", ctypes.c_uint32),
+        ("th32ParentProcessID", ctypes.c_uint32),
+        ("pcPriClassBase", ctypes.c_int32),
+        ("dwFlags", ctypes.c_uint32),
+        ("szExeFile", ctypes.c_char * 260),
+    ]
 
 
 def is_admin():
@@ -73,19 +86,6 @@ class Offsets:
 #     """Toolhelp32 snapshot ile process bul."""
 #     TH32CS_SNAPPROCESS = 0x00000002
 
-#     class PROCESSENTRY32(ctypes.Structure):
-#         _fields_ = [
-#             ("dwSize", ctypes.c_uint32),
-#             ("cntUsage", ctypes.c_uint32),
-#             ("th32ProcessID", ctypes.c_uint32),
-#             ("th32DefaultHeapID", ctypes.c_uint64),
-#             ("th32ModuleID", ctypes.c_uint32),
-#             ("cntThreads", ctypes.c_uint32),
-#             ("th32ParentProcessID", ctypes.c_uint32),
-#             ("pcPriClassBase", ctypes.c_int32),
-#             ("dwFlags", ctypes.c_uint32),
-#             ("szExeFile", ctypes.c_char * 260),
-#         ]
 
 #     snapshot = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
 #     if snapshot == ctypes.c_void_p(-1).value:
