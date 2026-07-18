@@ -166,6 +166,165 @@ kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 kernel32.CloseHandle.restype = wintypes.BOOL
 
 
+def get_module_base_peb(handle: int, module_name: str) -> Optional[int]:
+    """
+    PEB üzerinden modül base adresini bul.
+    NtQueryInformationProcess + ReadProcessMemory kullanır.
+    Toolhelp32Snapshot gerektirmez, access denied sorununu aşar.
+    """
+    ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+    
+    # NtQueryInformationProcess
+    ntdll.NtQueryInformationProcess.argtypes = [
+        ctypes.wintypes.HANDLE,
+        ctypes.wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.wintypes.ULONG,
+        ctypes.POINTER(ctypes.wintypes.ULONG),
+    ]
+    ntdll.NtQueryInformationProcess.restype = ctypes.wintypes.LONG
+    
+    PROCESS_BASIC_INFORMATION = 0
+    
+    class PEB_LDR_DATA(ctypes.Structure):
+        _fields_ = [
+            ("_length1", ctypes.c_byte * 8),
+            ("_length2", ctypes.c_byte * 8),
+            ("InLoadOrderModuleList", ctypes.c_void_p * 2),
+            ("InMemoryOrderModuleList", ctypes.c_void_p * 2),
+            ("InInitializationOrderModuleList", ctypes.c_void_p * 2),
+        ]
+    
+    class PROCESS_BASIC_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("ExitStatus", ctypes.c_void_p),
+            ("PebBaseAddress", ctypes.c_void_p),
+            ("AffinityMask", ctypes.c_void_p),
+            ("BasePriority", ctypes.c_void_p),
+            ("UniqueProcessId", ctypes.c_void_p),
+            ("InheritedFromUniqueProcessId", ctypes.c_void_p),
+        ]
+    
+    pbi = PROCESS_BASIC_INFORMATION()
+    return_length = ctypes.wintypes.ULONG(0)
+    
+    status = ntdll.NtQueryInformationProcess(
+        handle,
+        PROCESS_BASIC_INFORMATION,
+        ctypes.byref(pbi),
+        ctypes.sizeof(pbi),
+        ctypes.byref(return_length)
+    )
+    
+    if status != 0:
+        print(f"[!] NtQueryInformationProcess failed: 0x{status:X}")
+        return None
+    
+    peb_addr = pbi.PebBaseAddress
+    if not peb_addr:
+        return None
+    
+    # PEB -> LDR
+    ldr_data = ctypes.c_void_p(0)
+    bytes_read = ctypes.c_ulong(0)
+    if not kernel32.ReadProcessMemory(
+        handle,
+        ctypes.c_void_p(peb_addr + 0x18),  # PEB.Ldr
+        ctypes.byref(ldr_data),
+        ctypes.sizeof(ctypes.c_void_p),
+        ctypes.byref(bytes_read)
+    ):
+        print("[!] PEB.Ldr okunamadı")
+        return None
+    
+    # LDR -> InLoadOrderModuleList.Flink
+    flink = ctypes.c_void_p(0)
+    if not kernel32.ReadProcessMemory(
+        handle,
+        ctypes.c_void_p(ldr_data.value + 0x10),  # LDR.InLoadOrderModuleList.Flink
+        ctypes.byref(flink),
+        ctypes.sizeof(ctypes.c_void_p),
+        ctypes.byref(bytes_read)
+    ):
+        print("[!] LDR.Flink okunamadı")
+        return None
+    
+    current = flink.value
+    first_entry = current
+    
+    while True:
+        # LIST_ENTRY'nin bulunduğu LDR_DATA_TABLE_ENTRY
+        # Entry->InLoadOrderLinks, LDR_DATA_TABLE_ENTRY'de offset 0
+        entry = current
+        
+        # DllBase = LDR_DATA_TABLE_ENTRY + 0x20 (x64)
+        dll_base = ctypes.c_void_p(0)
+        if not kernel32.ReadProcessMemory(
+            handle,
+            ctypes.c_void_p(entry + 0x20),
+            ctypes.byref(dll_base),
+            ctypes.sizeof(ctypes.c_void_p),
+            ctypes.byref(bytes_read)
+        ):
+            break
+        
+        # BaseDllName (UNICODE_STRING) = LDR_DATA_TABLE_ENTRY + 0x38 (x64)
+        # UNICODE_STRING: +0x00 Length(ushort), +0x08 Buffer(ptr)
+        name_len_buf = ctypes.c_ushort(0)
+        if not kernel32.ReadProcessMemory(
+            handle,
+            ctypes.c_void_p(entry + 0x38),
+            ctypes.byref(name_len_buf),
+            2,
+            ctypes.byref(bytes_read)
+        ):
+            break
+        
+        name_ptr = ctypes.c_void_p(0)
+        if not kernel32.ReadProcessMemory(
+            handle,
+            ctypes.c_void_p(entry + 0x40),  # UNICODE_STRING.Buffer
+            ctypes.byref(name_ptr),
+            ctypes.sizeof(ctypes.c_void_p),
+            ctypes.byref(bytes_read)
+        ):
+            break
+        
+        if name_ptr.value and name_len_buf.value > 0:
+            buf = ctypes.create_string_buffer(name_len_buf.value)
+            if kernel32.ReadProcessMemory(
+                handle,
+                ctypes.c_void_p(name_ptr.value),
+                buf,
+                name_len_buf.value,
+                ctypes.byref(bytes_read)
+            ):
+                dll_name = buf.raw[:bytes_read.value].decode("utf-16-le", errors="ignore")
+                
+                if dll_name.lower() == module_name.lower():
+                    print(f"[+] {module_name} -> 0x{dll_base.value:X} (PEB yöntemi)")
+                    return dll_base.value
+        
+        # Sonraki module geç (InLoadOrderLinks.Flink)
+        next_entry = ctypes.c_void_p(0)
+        if not kernel32.ReadProcessMemory(
+            handle,
+            ctypes.c_void_p(current),
+            ctypes.byref(next_entry),
+            ctypes.sizeof(ctypes.c_void_p),
+            ctypes.byref(bytes_read)
+        ):
+            break
+        
+        if next_entry.value == first_entry:
+            break
+        
+        current = next_entry.value
+    
+    print(f"[!] {module_name} PEB'de bulunamadı")
+    return None
+
+
 def get_module_base(process_id: int, module_name: str) -> Optional[int]:
     """
     Belirtilen process içerisindeki modülün base adresini döndürür.
@@ -216,22 +375,21 @@ class CS2Memory:
         self.engine_base = None
 
     def attach(self) -> bool:
-        """cs2.exe process'ine bağlan."""
         self.process_id = find_process("cs2.exe")
-        print(self.process_id)
         if not self.process_id:
-            print("[!] cs2.exe bulunamadı! Oyun çalışıyor mu?")
+            print("[!] cs2.exe bulunamadı!")
             return False
 
         self.handle = kernel32.OpenProcess(
             PROCESS_VM_READ | PROCESS_QUERY_INFORMATION, False, self.process_id
         )
         if not self.handle:
-            print("[!] Process açılamadı. Yönetici olarak çalıştırıyor musun?")
+            print("[!] OpenProcess başarısız!")
             return False
 
-        self.client_base = get_module_base(self.process_id, "client.dll")
-        self.engine_base = get_module_base(self.process_id, "engine2.dll")
+        # PEB yöntemi ile modül adreslerini bul
+        self.client_base = get_module_base_peb(self.handle, "client.dll")
+        self.engine_base = get_module_base_peb(self.handle, "engine2.dll")
 
         if not self.client_base:
             print("[!] client.dll bulunamadı!")
@@ -241,7 +399,6 @@ class CS2Memory:
         print(f"[+] client.dll: 0x{self.client_base:X}")
         print(f"[+] engine2.dll: 0x{self.engine_base:X}")
         return True
-
     def read_bytes(self, address: int, size: int) -> Optional[bytearray]:
         """Adresten byte oku."""
         buf = ctypes.create_string_buffer(size)
@@ -659,6 +816,4 @@ def main():
 
 
 if __name__ == "__main__":
-    base = get_module_base(17888, "kernel32.dll")
-    print(hex(base) if base else None)
     main()
