@@ -186,8 +186,8 @@ class CS2Memory:
             print("[!] Process açılamadı. Yönetici olarak çalıştırıyor musun?")
             return False
 
-        self.client_base = get_module_base(self.process_id, "client.dll")
-        self.engine_base = get_module_base(self.process_id, "engine2.dll")
+        self.client_base = get_module_base(20116, "client.dll")
+        self.engine_base = get_module_base(20116, "engine2.dll")
 
         if not self.client_base:
             print("[!] client.dll bulunamadı!")
