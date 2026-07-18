@@ -21,7 +21,7 @@ def enum_proc(hwnd, lParam):
         title = ctypes.create_unicode_buffer(length + 1)
         ctypes.windll.user32.GetWindowTextW(hwnd, title, length + 1)
         if "Counter-Strike" in title.value or "CS2" in title.value:
-            print(f"CS2 Pencere bulundu: PID={pid.value}, Title={title.value}")
+            print(f"CS2 Pencere bulundu: PID={pid.value}, Title={title.value}, {title}")
             cs2_pids.append(pid.value)
     return True
 

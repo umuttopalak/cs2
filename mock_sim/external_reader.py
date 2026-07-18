@@ -12,6 +12,29 @@ from typing import Optional, Tuple
 import struct
 import time
 
+
+import ctypes
+import sys
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+if not is_admin():
+    ctypes.windll.shell32.ShellExecuteW(
+        None,
+        "runas",
+        sys.executable,
+        " ".join(sys.argv),
+        None,
+        1,
+    )
+    sys.exit()
+
+
+
 # ---------------------------------------------------------------------------
 # Win32 API bindings
 # ---------------------------------------------------------------------------
@@ -25,18 +48,18 @@ PROCESS_QUERY_INFORMATION = 0x0400
 # https://github.com/a2x/cs2-offsets adresinden güncelle
 class Offsets:
     # client.dll
-    dwLocalPlayerController = 0x1A2D3E0   # placeholder - güncelle!
-    dwEntityList = 0x1A2D3E8             # placeholder - güncelle!
-    dwViewMatrix = 0x1A2D3F0             # placeholder - güncelle!
+    dwLocalPlayerController = 0x237EBA0   # placeholder - güncelle!
+    dwEntityList = 0X254EE60             # placeholder - güncelle!
+    dwViewMatrix = 0x23A9340             # placeholder - güncelle!
     
     # Entity offsets
-    m_iHealth = 0x3C                     # placeholder
-    m_hPlayerPawn = 0x2C8               # placeholder
-    m_iTeamNum = 0x3E0                   # placeholder
-    m_sSanitizedPlayerName = 0x6B0       # placeholder
-    m_vecOrigin = 0xC0                   # placeholder
-    m_vecViewOffset = 0xC8               # placeholder
-    m_lifeState = 0x330                  # placeholder
+    m_iHealth = 0x34C                     # placeholder
+    m_hPlayerPawn = 0x914               # placeholder
+    m_iTeamNum = 0x3E7                   # placeholder
+    m_sSanitizedPlayerName = 0x868       # placeholder
+    m_vecOrigin = 0x600                   # placeholder
+    m_vecViewOffset = 0xE78               # placeholder
+    m_lifeState = 0x354                  # placeholder
 
 
 # ---------------------------------------------------------------------------
@@ -550,4 +573,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+	main()
