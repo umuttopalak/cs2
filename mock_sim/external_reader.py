@@ -63,19 +63,17 @@ PROCESS_QUERY_INFORMATION = 0x0400
 # GÜNCEL OFFSET'LER - cs2 her güncellemede değişir!
 # https://github.com/a2x/cs2-offsets adresinden güncelle
 class Offsets:
-    # client.dll
-    dwLocalPlayerController = 0x237EBA0  # placeholder - güncelle!
-    dwEntityList = 0x254EE60  # placeholder - güncelle!
-    dwViewMatrix = 0x23A9340  # placeholder - güncelle!
-
-    # Entity offsets
-    m_iHealth = 0x34C  # placeholder
-    m_hPlayerPawn = 0x914  # placeholder
-    m_iTeamNum = 0x3E7  # placeholder
-    m_sSanitizedPlayerName = 0x868  # placeholder
-    m_vecOrigin = 0x600  # placeholder
-    m_vecViewOffset = 0xE78  # placeholder
-    m_lifeState = 0x354  # placeholder
+    dwLocalPlayerController = 0x237B120   # 37219232
+    dwEntityList = 0x254EE60              # 39120480
+    dwViewMatrix = 0x23A9340             # 37393216
+    
+    m_iHealth = 0x34C
+    m_hPlayerPawn = 0x914
+    m_iTeamNum = 0x3E7     # doğrula
+    m_sSanitizedPlayerName = 0x778        # 1912
+    m_vecOrigin = 0x600
+    m_vecViewOffset = 0xE78
+    m_lifeState = 0x354
 
 
 # ---------------------------------------------------------------------------
